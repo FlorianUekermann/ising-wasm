@@ -1,27 +1,34 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
+	"syscall/js"
 	"time"
 
 	"honnef.co/go/js/dom/v2"
 )
 
-const mag uint = 8
-const len uint = 1 << mag
-const scale uint = 3
+var rng = rand.New(rand.NewSource(0))
 
 func main() {
-	var ctx = createCanvas(len, scale)
+	// Magnitude of side length
+	var mag int = 8
+	// Side length (e.g. 256 for mag=8)
+	var length int = 1 << mag
 
+	// Precalculate probabilities for delta in range [-4, ..., +4]
 	var p [9]float64
 	for i := range p {
-		var beta = math.Log(1+math.Sqrt(2.0)) / 2
+		var beta = math.Log(1+math.Sqrt(2.0)) / 2 // 0.44068679350977147
+		beta = 0.44
 		p[i] = math.Exp(-2 * beta * float64(i-4))
 	}
 
-	var state = make([]int8, len*len)
+	var ctx, pixels = createCanvas(length)
+
+	var state = make([]int8, length*length)
 	for i := range state {
 		state[i] = int8(2*(i%2) - 1)
 	}
@@ -29,52 +36,62 @@ func main() {
 	var start = time.Now()
 	var count = 0
 	for {
-		for i := uint(0); i < len*len; i++ {
-			var r = uint(rand.Int())
-			var x, y = r % len, (r / len) % len
-			var center = x + y*len
-			var right = (x+1)%len + y*len
-			var left = (x-1)%len + y*len
-			var bottom = x + ((y+1)%len)*len
-			var top = x + ((y-1)%len)*len
-			var sum = state[right] + state[left] + state[bottom] + state[top]
-			var delta = state[center] * sum
-			if delta <= 0 || rand.Float64() < p[delta+4] {
+		for i := 0; i < length*length; i++ {
+			var mask = 1<<mag - 1
+			var r = rng.Int()
+			var x, y = r & mask, (r >> mag) & mask
+			var center, left, right, top, bottom = xy2i(x, y, mag), xy2i(x-1, y, mag), xy2i(x+1, y, mag), xy2i(x, y-1, mag), xy2i(x, y+1, mag)
+			var delta = state[center] * (state[left] + state[right] + state[top] + state[bottom])
+			if delta <= 0 || rng.Float64() < p[delta+4] {
 				state[center] *= -1
 			}
 		}
 		count += 1
-		if t := time.Since(start); t > 300*time.Millisecond {
-			// fmt.Printf("updates: %d; rate: %f/s\n", count, float64(count)/t.Seconds())
+		if t := time.Since(start); t > 100*time.Millisecond {
+			fmt.Printf("updates: %d; rate: %f/s\n", count, float64(count)/t.Seconds())
 			start = time.Now()
 			count = 0
-			draw(len, scale, state, ctx)
-			time.Sleep(2 * time.Millisecond)
+			draw(length, state, ctx, pixels)
+			time.Sleep(1 * time.Millisecond)
 		}
 	}
 
 }
 
-func createCanvas(len, scale uint) *dom.CanvasRenderingContext2D {
+func xy2i(x int, y int, mag int) int {
+	var mask = 1<<mag - 1
+	return x&mask + (y&mask)<<mag
+}
+
+func createCanvas(len int) (*dom.CanvasRenderingContext2D, []byte) {
 	var document = dom.GetWindow().Document()
 	var body = document.(dom.HTMLDocument).Body()
 	var canvas = document.CreateElement("canvas").(*dom.HTMLCanvasElement)
-	canvas.SetHeight(int(len * scale))
-	canvas.SetWidth(int(len * scale))
+	canvas.Style().SetProperty("image-rendering", "pixelated", "important")
+	canvas.SetHeight(len)
+	canvas.SetWidth(len)
 	body.AppendChild(canvas)
 	var ctx = canvas.GetContext2d()
 	ctx.SetFillStyle("blue")
-	return ctx
+	var pixels = make([]byte, len*len*4)
+	return ctx, pixels
 }
 
-func draw(len, scale uint, state []int8, ctx *dom.CanvasRenderingContext2D) {
-	for x := uint(0); x < len; x++ {
-		for y := uint(0); y < len; y++ {
-			if state[x+y*len] < 0 {
-				ctx.ClearRect(float64(x*scale), float64(y*scale), float64(scale), float64(scale))
-			} else {
-				ctx.FillRect(float64(x*scale), float64(y*scale), float64(scale), float64(scale))
-			}
+func draw(len int, state []int8, ctx *dom.CanvasRenderingContext2D, pixels []byte) {
+	for i := 0; i < len*len; i++ {
+		var pixel = pixels[i*4 : i*4+4]
+		pixel[3] = 255 // alpha
+		if state[i] < 0 {
+			pixel[0] = 255 // red
+			pixel[1] = 0
+			pixel[2] = 0
+		} else {
+			pixel[0] = 0
+			pixel[1] = 0
+			pixel[2] = 255 // blue
 		}
 	}
+	var arr = js.Global().Get("Uint8ClampedArray").New(len * len * 4)
+	js.CopyBytesToJS(arr, pixels)
+	ctx.PutImageData(&dom.ImageData{js.Global().Get("ImageData").New(arr, len)}, 0, 0)
 }
