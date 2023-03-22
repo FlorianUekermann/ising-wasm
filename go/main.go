@@ -10,8 +10,6 @@ import (
 	"honnef.co/go/js/dom/v2"
 )
 
-var rng = rand.New(rand.NewSource(0))
-
 func main() {
 	// Magnitude of side length
 	var mag int = 8
@@ -22,7 +20,6 @@ func main() {
 	var p [9]float64
 	for i := range p {
 		var beta = math.Log(1+math.Sqrt(2.0)) / 2 // 0.44068679350977147
-		beta = 0.44
 		p[i] = math.Exp(-2 * beta * float64(i-4))
 	}
 
@@ -32,30 +29,29 @@ func main() {
 	for i := range state {
 		state[i] = int8(2*(i%2) - 1)
 	}
+	var rng = rand.New(rand.NewSource(0))
 
 	var start = time.Now()
-	var count = 0
-	for {
-		for i := 0; i < length*length; i++ {
-			var mask = 1<<mag - 1
-			var r = rng.Int()
-			var x, y = r & mask, (r >> mag) & mask
-			var center, left, right, top, bottom = xy2i(x, y, mag), xy2i(x-1, y, mag), xy2i(x+1, y, mag), xy2i(x, y-1, mag), xy2i(x, y+1, mag)
-			var delta = state[center] * (state[left] + state[right] + state[top] + state[bottom])
-			if delta <= 0 || rng.Float64() < p[delta+4] {
-				state[center] *= -1
+	var lastDraw = time.Now()
+	for sweeps := 0; true; sweeps++ {
+		for off := 0; off < 3; off++ {
+			for i := off; i < length*length; i += 3 {
+				var y = i >> mag
+				var x = i - y
+				var center, left, right, top, bottom = xy2i(x, y, mag), xy2i(x-1, y, mag), xy2i(x+1, y, mag), xy2i(x, y-1, mag), xy2i(x, y+1, mag)
+				var delta = state[center] * (state[left] + state[right] + state[top] + state[bottom])
+				if delta <= 0 || rng.Float64() < p[delta+4] {
+					state[center] *= -1
+				}
 			}
 		}
-		count += 1
-		if t := time.Since(start); t > 100*time.Millisecond {
-			fmt.Printf("updates: %d; rate: %f/s\n", count, float64(count)/t.Seconds())
-			start = time.Now()
-			count = 0
+		if time.Since(lastDraw) > 100*time.Millisecond {
+			lastDraw = time.Now()
+			fmt.Printf("sweep rate: %f/s\n", float64(sweeps)/time.Since(start).Seconds())
 			draw(length, state, ctx, pixels)
 			time.Sleep(1 * time.Millisecond)
 		}
 	}
-
 }
 
 func xy2i(x int, y int, mag int) int {
